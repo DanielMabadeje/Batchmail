@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Batchmail",
+  "version": "0.1.0",
+  "description": "Send batch email through your own Gmail account, paced to stay within Gmail's limits.",
+
+  "minimum_chrome_version": "116",
+
+  "permissions": [
+    "identity",
+    "storage",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "https://gmail.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
+  ],
+
+  "background": {
+    "service_worker": "src/background/index.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Batchmail"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["src/content/index.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "options_page": "options.html",
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

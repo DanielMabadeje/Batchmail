@@ -1,0 +1,57 @@
+# Batchmail — self-hosted backend
+#
+# Everything the extension needs to talk to. There is no mail server here,
+# and there is no queue worker: in v1 the extension does the sending and this
+# stack only keeps score.
+#
+#   cp .env.example .env
+#   docker compose up -d
+#   docker compose exec api php artisan migrate
+#
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_KEY: ${APP_KEY}
+      APP_URL: ${APP_URL:-http://localhost:8000}
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-batchmail}
+      DB_USERNAME: ${DB_USERNAME:-batchmail}
+      DB_PASSWORD: ${DB_PASSWORD:-secret}
+      # Only the client id is needed. Batchmail uses PKCE from the extension,
+      # so there is no client secret anywhere in this stack.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      # Comma-separated extension origins allowed to call the API.
+      EXTENSION_ORIGINS: ${EXTENSION_ORIGINS}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./api:/var/www/html
+      - /var/www/html/vendor
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-batchmail}
+      POSTGRES_USER: ${DB_USERNAME:-batchmail}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - batchmail-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-batchmail}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  batchmail-db:
