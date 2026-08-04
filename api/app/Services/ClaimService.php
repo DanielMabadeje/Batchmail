@@ -119,8 +119,7 @@ class ClaimService
             })
             ->orderBy('id')
             ->limit($take)
-            ->lockForUpdate()
-            ->skipLocked()
+            ->lock('for update skip locked')
             ->pluck('id');
 
         if ($ids->isEmpty()) {

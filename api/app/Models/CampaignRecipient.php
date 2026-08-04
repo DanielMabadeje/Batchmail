@@ -9,7 +9,23 @@ use Illuminate\Support\Str;
 
 class CampaignRecipient extends Model
 {
-    protected $fillable = ['email', 'name', 'merge_data'];
+    protected $fillable = [
+        'email',
+        'name',
+        'merge_data',
+        'tracking_token',
+        'status',
+        'mail_account_id',
+        'lease_id',
+        'leased_at',
+        'lease_expires_at',
+        'gmail_message_id',
+        'gmail_thread_id',
+        'attempts',
+        'error_code',
+        'error_message',
+        'sent_at',
+    ];
 
     protected function casts(): array
     {

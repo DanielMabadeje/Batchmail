@@ -103,7 +103,7 @@ class CampaignController extends Controller
         $rows = collect($validated['recipients'])
             // Deduplicate within the payload itself — upsert cannot resolve
             // two conflicting rows in the same statement.
-            ->uniqueBy(fn (array $row) => Str::lower($row['email']))
+            ->unique(fn (array $row) => Str::lower($row['email']))
             ->map(fn (array $row) => [
                 'campaign_id' => $campaign->id,
                 'email' => Str::lower($row['email']),

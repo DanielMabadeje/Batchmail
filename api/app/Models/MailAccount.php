@@ -22,6 +22,9 @@ class MailAccount extends Model
         'display_name',
         'daily_recipient_cap',
         'hourly_recipient_cap',
+        'status',
+        'throttled_until',
+        'last_sent_at',
     ];
 
     protected function casts(): array

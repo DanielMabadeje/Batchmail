@@ -27,6 +27,13 @@ class Campaign extends Model
         'timezone',
         'track_opens',
         'track_clicks',
+        // Internal state, written by the services rather than the client.
+        'status',
+        'started_at',
+        'completed_at',
+        'total_count',
+        'sent_count',
+        'failed_count',
     ];
 
     protected function casts(): array
@@ -90,7 +97,7 @@ class Campaign extends Model
     /** Recompute counters from the recipients table — the trustworthy number. */
     public function refreshCounters(): void
     {
-        $counts = $this->recipients()
+        $counts = $this->recipients()->toBase()
             ->selectRaw('status, count(*) as total')
             ->groupBy('status')
             ->pluck('total', 'status');
