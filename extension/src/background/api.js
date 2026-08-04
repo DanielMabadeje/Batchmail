@@ -29,22 +29,36 @@ export async function clearAuthToken() {
 }
 
 /**
- * Exchange a Google ID token for a Sanctum token. The same Google consent
- * that grants gmail.send also identifies the user to the backend, so there
- * is no second sign-in.
+ * Exchange an authorisation code for tokens and a Batchmail session.
+ *
+ * Unauthenticated by necessity — this call is what creates the session.
+ * Returns { token, user, account, google: { access_token, refresh_token,
+ * expires_in } }. The Gmail tokens are handed straight back to the
+ * extension; the backend does not keep them.
  */
-export async function signIn(googleIdToken) {
-  const res = await fetch(`${BASE_URL}/api/auth/google`, {
+export async function exchangeCode({ code, code_verifier, redirect_uri }) {
+  const res = await fetch(`${BASE_URL}/api/auth/google/exchange`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ id_token: googleIdToken }),
+    body: JSON.stringify({ code, code_verifier, redirect_uri }),
   });
+
+  if (res.status === 422) {
+    const { message } = await res.json();
+    throw new Error(message ?? 'Google rejected the sign-in.');
+  }
 
   if (!res.ok) throw new Error(`Sign-in failed (${res.status})`);
 
-  const { token, user } = await res.json();
-  await setAuthToken(token);
-  return user;
+  return res.json();
+}
+
+/** Mint a fresh Gmail access token. The client secret lives server-side. */
+export async function refreshGoogleToken(refreshToken) {
+  return request('/api/auth/google/refresh', {
+    method: 'POST',
+    body: { refresh_token: refreshToken },
+  });
 }
 
 // --- Request helper -------------------------------------------------------
@@ -97,11 +111,15 @@ export class ValidationError extends Error {
 
 // --- Accounts -------------------------------------------------------------
 
-export function registerAccount({ email, googleSub, displayName }) {
+export function registerAccount({ email, google_sub, display_name }) {
   return request('/api/accounts', {
     method: 'POST',
-    body: { email, google_sub: googleSub, display_name: displayName },
+    body: { email, google_sub, display_name },
   });
+}
+
+export function removeAccount(accountId) {
+  return request(`/api/accounts/${accountId}`, { method: 'DELETE' });
 }
 
 export function accountBudget(accountId) {

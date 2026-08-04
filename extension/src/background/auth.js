@@ -1,26 +1,21 @@
 /**
  * Google OAuth for Batchmail.
  *
- * WHY launchWebAuthFlow AND NOT getAuthToken
- * ------------------------------------------
- * chrome.identity.getAuthToken is simpler and has a real advantage: Chrome
- * holds the credential, so we never see a refresh token at all. But it binds
- * you to the accounts signed into the Chrome profile, which makes the
- * multi-account rotation story — the only way past Gmail's daily caps —
- * awkward to impossible.
+ * SPLIT OF RESPONSIBILITY
+ * -----------------------
+ * The extension runs the redirect and generates the PKCE pair. The backend
+ * completes the token exchange, because launchWebAuthFlow redirects to
+ * chromiumapp.org — which must be registered on a "Web application" OAuth
+ * client — and Google requires that client's secret at the token endpoint
+ * even when PKCE is used.
  *
- * launchWebAuthFlow with PKCE lets the user connect any number of Gmail
- * accounts independently of their Chrome profile. The cost is that we hold
- * the refresh token in chrome.storage. That is still local to the user's
- * machine and never reaches the Batchmail server, which is the property that
- * matters.
+ * The tokens come straight back here and live in chrome.storage. The backend
+ * does not persist them and cannot send mail on the user's behalf.
  *
- * SETUP
- * -----
- * Create the OAuth client in Google Cloud as type "Chrome Extension" — that
- * type issues no client secret, which is what makes PKCE from the extension
- * safe. A "Web application" client would require a secret and force the code
- * exchange through the backend.
+ * The alternative, chrome.identity.getAuthToken, needs no secret and lets
+ * Chrome hold the credential — but it binds you to accounts signed into the
+ * Chrome profile, which makes multi-account rotation impractical. Rotation
+ * is the only real way past Gmail's daily caps, so we take this route.
  */
 
 import * as api from './api.js';
@@ -35,11 +30,10 @@ const SCOPES = [
 ].join(' ');
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 
-// --- PKCE helpers ---------------------------------------------------------
+// --- PKCE -----------------------------------------------------------------
 
-function base64UrlEncode(bytes) {
+function base64Url(bytes) {
   return btoa(String.fromCharCode(...new Uint8Array(bytes)))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
@@ -47,7 +41,7 @@ function base64UrlEncode(bytes) {
 }
 
 function randomVerifier() {
-  return base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));
+  return base64Url(crypto.getRandomValues(new Uint8Array(32)));
 }
 
 async function challengeFor(verifier) {
@@ -55,16 +49,16 @@ async function challengeFor(verifier) {
     'SHA-256',
     new TextEncoder().encode(verifier)
   );
-  return base64UrlEncode(digest);
+  return base64Url(digest);
 }
 
-// --- Connect a new account ------------------------------------------------
+// --- Connect --------------------------------------------------------------
 
 /**
- * Runs the interactive consent flow and returns a stored account record.
+ * Runs consent, exchanges the code through the backend, stores the account.
  *
- * `loginHint` pre-fills the account chooser. Pass it when reconnecting a
- * known address so the user isn't asked which account they meant.
+ * `loginHint` pre-fills the chooser — pass it when reconnecting a known
+ * address so the user isn't asked which account they meant.
  */
 export async function connectAccount({ loginHint = null } = {}) {
   const verifier = randomVerifier();
@@ -78,9 +72,9 @@ export async function connectAccount({ loginHint = null } = {}) {
     scope: SCOPES,
     code_challenge: challenge,
     code_challenge_method: 'S256',
-    // Required to get a refresh token back. Without prompt=consent Google
-    // returns one only on the very first authorisation for that account,
-    // which makes reconnect flows fail confusingly.
+    // Both are required to reliably get a refresh token. Without
+    // prompt=consent Google returns one only on an account's very first
+    // authorisation, which makes reconnect flows fail confusingly.
     access_type: 'offline',
     prompt: 'consent select_account',
   });
@@ -93,41 +87,41 @@ export async function connectAccount({ loginHint = null } = {}) {
   });
 
   const returned = new URL(responseUrl);
-  const error = returned.searchParams.get('error');
-  if (error) throw new Error(`Google denied authorisation: ${error}`);
+
+  if (returned.searchParams.get('error')) {
+    throw new Error(
+      `Google denied authorisation: ${returned.searchParams.get('error')}`
+    );
+  }
 
   const code = returned.searchParams.get('code');
-  if (!code) throw new Error('No authorisation code returned');
+  if (!code) throw new Error('Google returned no authorisation code.');
 
-  const tokens = await exchange({
-    grant_type: 'authorization_code',
+  // One call: the backend exchanges the code, creates or finds the user,
+  // and returns both a Batchmail session and the Gmail tokens.
+  const result = await api.exchangeCode({
     code,
     code_verifier: verifier,
     redirect_uri: redirectUri,
   });
 
-  const profile = decodeIdToken(tokens.id_token);
+  await api.setAuthToken(result.token);
+
+  // Register the address so the backend can do quota accounting for it.
+  // Without this row, claim() finds no available accounts and hands back
+  // empty batches with no obvious cause.
+  const registered = await api.registerAccount(result.account);
 
   const account = {
-    email: profile.email,
-    googleSub: profile.sub,
-    displayName: profile.name ?? profile.email,
-    refreshToken: tokens.refresh_token,
-    accessToken: tokens.access_token,
-    expiresAt: Date.now() + tokens.expires_in * 1000,
+    backendId: registered.id,
+    email: result.account.email,
+    googleSub: result.account.google_sub,
+    displayName: result.account.display_name,
+    refreshToken: result.google.refresh_token,
+    accessToken: result.google.access_token,
+    expiresAt: Date.now() + result.google.expires_in * 1000,
+    needsReconnect: false,
   };
-
-  // Sign in to Batchmail with the same consent, if we aren't already. One
-  // Google authorisation covers both identity and gmail.send.
-  const token = await api.currentToken();
-  if (!token) {
-    await api.signIn(tokens.id_token);
-  }
-
-  // The backend needs a row for this address or claim() will find no
-  // available accounts and hand back empty batches with no obvious cause.
-  const registered = await api.registerAccount(account);
-  account.backendId = registered.id;
 
   await saveAccount(account);
   return account;
@@ -135,25 +129,10 @@ export async function connectAccount({ loginHint = null } = {}) {
 
 // --- Token lifecycle ------------------------------------------------------
 
-async function exchange(body) {
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: CLIENT_ID, ...body }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`Token exchange failed (${res.status}): ${detail}`);
-  }
-
-  return res.json();
-}
-
 /**
- * Returns a usable access token for an account, refreshing if needed.
+ * A usable Gmail access token, refreshed through the backend if stale.
  *
- * Refresh 60s early — a token that expires mid-request produces a 401 that
+ * Refreshes 60s early — a token that expires mid-request produces a 401 that
  * is easy to mistake for a revoked grant.
  */
 export async function accessTokenFor(email) {
@@ -165,20 +144,18 @@ export async function accessTokenFor(email) {
   }
 
   try {
-    const tokens = await exchange({
-      grant_type: 'refresh_token',
-      refresh_token: account.refreshToken,
-    });
+    const refreshed = await api.refreshGoogleToken(account.refreshToken);
 
-    account.accessToken = tokens.access_token;
-    account.expiresAt = Date.now() + tokens.expires_in * 1000;
+    account.accessToken = refreshed.access_token;
+    account.expiresAt = Date.now() + refreshed.expires_in * 1000;
+    account.needsReconnect = false;
     await saveAccount(account);
 
     return account.accessToken;
   } catch (err) {
-    // A dead refresh token means the user revoked access, changed their
-    // password, or the grant expired through disuse. Mark it so the UI can
-    // prompt a reconnect rather than silently failing every send.
+    // A dead refresh token means revoked access, a password change, or a
+    // grant expired through disuse. Flag it so the UI can prompt a
+    // reconnect instead of silently failing every send.
     account.needsReconnect = true;
     await saveAccount(account);
     throw new Error(`Reconnect required for ${email}: ${err.message}`);
@@ -187,13 +164,18 @@ export async function accessTokenFor(email) {
 
 export async function disconnectAccount(email) {
   const account = await getAccount(email);
+
   if (account?.refreshToken) {
-    // Best effort — revoke server-side so the grant disappears from the
-    // user's Google account permissions page too.
+    // Best effort — revoke at Google so the grant also disappears from the
+    // user's account permissions page.
     await fetch(
       `https://oauth2.googleapis.com/revoke?token=${account.refreshToken}`,
       { method: 'POST' }
     ).catch(() => {});
+  }
+
+  if (account?.backendId) {
+    await api.removeAccount(account.backendId).catch(() => {});
   }
 
   const { accounts = {} } = await chrome.storage.local.get('accounts');
@@ -214,17 +196,11 @@ async function getAccount(email) {
   return accounts[email] ?? null;
 }
 
+/** Local account list, with tokens stripped — safe to hand to the UI. */
 export async function listAccounts() {
   const { accounts = {} } = await chrome.storage.local.get('accounts');
-  return Object.values(accounts).map(({ refreshToken, accessToken, ...rest }) => rest);
-}
 
-// --- Utilities ------------------------------------------------------------
-
-function decodeIdToken(idToken) {
-  // Signature verification is unnecessary here: the token came directly from
-  // Google's token endpoint over TLS, not from an untrusted redirect.
-  const payload = idToken.split('.')[1];
-  const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-  return JSON.parse(json);
+  return Object.values(accounts).map(
+    ({ refreshToken, accessToken, ...rest }) => rest
+  );
 }
