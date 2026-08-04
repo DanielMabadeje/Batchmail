@@ -191,6 +191,10 @@ export function addRecipients(uuid, recipients) {
   );
 }
 
+export function createCampaign(fields) {
+  return request('/api/campaigns', { method: 'POST', body: fields });
+}
+
 export function startCampaign(uuid) {
   return request(`/api/campaigns/${uuid}/start`, { method: 'POST' });
 }
