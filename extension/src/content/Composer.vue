@@ -26,6 +26,15 @@ function send(message) {
   });
 }
 
+/** Vue's compiler can't handle literal braces inside an interpolation. */
+function fieldTag(field) {
+  return `{${'{'}${field}}${'}'}`;
+}
+
+function insertField(field) {
+  body.value += fieldTag(field);
+}
+
 onMounted(async () => {
   try {
     accounts.value = await send({ type: 'accounts:list' });
@@ -75,9 +84,9 @@ const canSend = computed(
     !unknownFields.value.length
 );
 
-function insertField(field) {
-  body.value += `{{${field}}}`;
-}
+// function insertField(field) {
+//   body.value += `{{${field}}}`;
+// }
 
 async function start() {
   error.value = null;
@@ -173,7 +182,7 @@ const segments = computed(() => {
                 type="button"
                 @click="insertField(field)"
               >
-                {{ '{{' + field + '}}' }}
+                {{ fieldTag(field) }}
               </button>
             </div>
 
@@ -188,7 +197,7 @@ const segments = computed(() => {
 
           <div class="field">
             <label for="bm-subject">Subject</label>
-            <input id="bm-subject" v-model="subject" placeholder="Hello {{first_name}}" />
+            <input id="bm-subject" v-model="subject" :placeholder="`Hello ${fieldTag('first_name')}`" />
           </div>
 
           <div class="field">
