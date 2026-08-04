@@ -23,6 +23,8 @@
  * exchange through the backend.
  */
 
+import * as api from './api.js';
+
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 const SCOPES = [
@@ -114,6 +116,18 @@ export async function connectAccount({ loginHint = null } = {}) {
     accessToken: tokens.access_token,
     expiresAt: Date.now() + tokens.expires_in * 1000,
   };
+
+  // Sign in to Batchmail with the same consent, if we aren't already. One
+  // Google authorisation covers both identity and gmail.send.
+  const token = await api.currentToken();
+  if (!token) {
+    await api.signIn(tokens.id_token);
+  }
+
+  // The backend needs a row for this address or claim() will find no
+  // available accounts and hand back empty batches with no obvious cause.
+  const registered = await api.registerAccount(account);
+  account.backendId = registered.id;
 
   await saveAccount(account);
   return account;

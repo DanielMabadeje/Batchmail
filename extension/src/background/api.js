@@ -15,6 +15,11 @@ async function authToken() {
   return apiToken ?? null;
 }
 
+/** Whether we already have a Batchmail session, without throwing. */
+export async function currentToken() {
+  return authToken();
+}
+
 export async function setAuthToken(token) {
   await chrome.storage.local.set({ apiToken: token });
 }
