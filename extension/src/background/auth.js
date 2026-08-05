@@ -22,12 +22,22 @@ import * as api from './api.js';
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
-const SCOPES = [
+const BASE_SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'openid',
   'email',
   'profile',
-].join(' ');
+];
+
+/**
+ * Requested only when someone actually imports a Sheets link, not at connect
+ * time. Fewer people see it on the consent screen, and Google's reviewers get
+ * a clearer story about why the app wants it.
+ *
+ * spreadsheets.readonly is a SENSITIVE scope, not restricted — it needs
+ * verification but no third-party security assessment.
+ */
+const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 
@@ -60,7 +70,7 @@ async function challengeFor(verifier) {
  * `loginHint` pre-fills the chooser — pass it when reconnecting a known
  * address so the user isn't asked which account they meant.
  */
-export async function connectAccount({ loginHint = null } = {}) {
+export async function connectAccount({ loginHint = null, extraScopes = [] } = {}) {
   const verifier = randomVerifier();
   const challenge = await challengeFor(verifier);
   const redirectUri = chrome.identity.getRedirectURL();
@@ -69,7 +79,7 @@ export async function connectAccount({ loginHint = null } = {}) {
     client_id: CLIENT_ID,
     response_type: 'code',
     redirect_uri: redirectUri,
-    scope: SCOPES,
+    scope: [...BASE_SCOPES, ...extraScopes].join(' '),
     code_challenge: challenge,
     code_challenge_method: 'S256',
     // Both are required to reliably get a refresh token. Without
@@ -77,6 +87,9 @@ export async function connectAccount({ loginHint = null } = {}) {
     // authorisation, which makes reconnect flows fail confusingly.
     access_type: 'offline',
     prompt: 'consent select_account',
+    // Carry forward anything already granted, so asking for Sheets access
+    // later doesn't silently drop gmail.send.
+    include_granted_scopes: 'true',
   });
 
   if (loginHint) params.set('login_hint', loginHint);
@@ -121,10 +134,28 @@ export async function connectAccount({ loginHint = null } = {}) {
     accessToken: result.google.access_token,
     expiresAt: Date.now() + result.google.expires_in * 1000,
     needsReconnect: false,
+    hasSheetsScope: extraScopes.includes(SHEETS_SCOPE),
   };
 
   await saveAccount(account);
   return account;
+}
+
+/**
+ * Make sure an account can read Sheets, prompting for consent if not.
+ *
+ * Incremental authorisation: the user only sees this the first time they
+ * paste a Sheets link, and never if they only ever paste cells.
+ */
+export async function ensureSheetsScope(email) {
+  const existing = await getAccount(email);
+
+  if (existing?.hasSheetsScope && !existing.needsReconnect) {
+    return accessTokenFor(email);
+  }
+
+  await connectAccount({ loginHint: email, extraScopes: [SHEETS_SCOPE] });
+  return accessTokenFor(email);
 }
 
 // --- Token lifecycle ------------------------------------------------------

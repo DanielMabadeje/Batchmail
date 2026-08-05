@@ -1,45 +1,40 @@
 /**
  * Batchmail inside Gmail.
  *
- * Injects a launcher button next to Compose and mounts the campaign composer
- * in a shadow root.
+ * Adds a floating launcher and mounts the campaign composer in a shadow root.
  *
- * Two things make this survive contact with Gmail:
- *
- * 1. SHADOW DOM. Gmail ships aggressive global CSS that would otherwise
- *    shred any injected UI. A shadow root isolates ours completely — and
- *    also stops our styles leaking into Gmail.
- *
- * 2. MUTATION OBSERVER. Gmail is a single-page app that tears down and
- *    rebuilds its chrome constantly. A button injected once will vanish, so
- *    we re-check and re-inject whenever the DOM changes.
+ * SHADOW DOM is doing real work here: Gmail ships aggressive global CSS that
+ * would otherwise shred any injected UI, and a shadow root also stops our
+ * styles leaking into Gmail.
  */
 
 import { createApp } from 'vue';
 import Composer from './Composer.vue';
-import panelStyles from './panel.css?inline';
-
-// Gmail's markup is obfuscated, but the compose button has carried this
-// attribute for years. It is the most stable anchor available.
-const COMPOSE_SELECTOR = '[gh="cm"]';
+// import panelStyles from './panel.css?inline';
+import panelStyles from './panel-styles.js';
 
 const LAUNCHER_ID = 'batchmail-launcher';
 const PANEL_ID = 'batchmail-panel';
 
 let app = null;
 
+/**
+ * A floating launcher rather than one injected into Gmail's sidebar.
+ *
+ * Gmail's markup is obfuscated and changes without notice — the compose
+ * button's `gh="cm"` attribute was stable for years and then wasn't. Anchoring
+ * to it means the button silently disappears on a Gmail redesign, which is a
+ * bug users report as "the extension stopped working".
+ *
+ * A fixed-position button owes Gmail nothing and cannot break this way.
+ */
 function injectLauncher() {
   if (document.getElementById(LAUNCHER_ID)) return;
 
-  const compose = document.querySelector(COMPOSE_SELECTOR);
-  if (!compose) return;
-
-  const container = compose.closest('div')?.parentElement;
-  if (!container) return;
-
   const host = document.createElement('div');
   host.id = LAUNCHER_ID;
-  host.style.cssText = 'margin: 8px 0 0 12px;';
+  host.style.cssText =
+    'position: fixed; bottom: 24px; right: 24px; z-index: 9998;';
 
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `
@@ -47,20 +42,21 @@ function injectLauncher() {
       button {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        padding: 8px 14px;
+        gap: 7px;
+        padding: 10px 16px;
         border: 1px solid #d8dce2;
-        border-radius: 16px;
+        border-radius: 20px;
         background: #fff;
         color: #14171f;
-        font: 500 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+        font: 550 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+        box-shadow: 0 2px 10px rgba(20, 23, 31, 0.12);
         cursor: pointer;
       }
       button:hover { background: #f5f7f9; }
       button:focus-visible { outline: 2px solid #0f5f5c; outline-offset: 2px; }
       .dot {
-        width: 6px;
-        height: 6px;
+        width: 7px;
+        height: 7px;
         border-radius: 50%;
         background: #0f5f5c;
       }
@@ -69,7 +65,7 @@ function injectLauncher() {
   `;
 
   shadow.querySelector('button').addEventListener('click', openPanel);
-  container.appendChild(host);
+  document.body.appendChild(host);
 }
 
 function openPanel() {
@@ -100,9 +96,9 @@ function closePanel() {
   document.getElementById(PANEL_ID)?.remove();
 }
 
-// Gmail rebuilds its chrome on navigation, so one injection is never enough.
-// Debounced because Gmail mutates the DOM constantly and we only care that
-// the button still exists.
+// Gmail is a single-page app that rebuilds large parts of the DOM on
+// navigation. Debounced heavily because Gmail mutates constantly and all we
+// care about is whether our button still exists.
 let pending = null;
 const observer = new MutationObserver(() => {
   if (pending) return;
@@ -114,3 +110,5 @@ const observer = new MutationObserver(() => {
 
 observer.observe(document.body, { childList: true, subtree: true });
 injectLauncher();
+
+console.info('[batchmail] content script ready');

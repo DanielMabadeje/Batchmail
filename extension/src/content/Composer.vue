@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { parseRecipients, missingFields } from '../lib/parse-recipients.js';
+import RichEditor from './RichEditor.vue';
 
 const props = defineProps({ onClose: { type: Function, required: true } });
 
@@ -16,6 +17,11 @@ const error = ref(null);
 const stage = ref('compose'); // compose | sending
 const progress = ref(null);
 
+const sheetUrl = ref('');
+const importing = ref(false);
+const importNote = ref(null);
+const bodyEditor = ref(null);
+
 function send(message) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(message, (reply) => {
@@ -24,15 +30,6 @@ function send(message) {
       else reject(new Error(reply?.error ?? 'The extension did not respond.'));
     });
   });
-}
-
-/** Vue's compiler can't handle literal braces inside an interpolation. */
-function fieldTag(field) {
-  return `{${'{'}${field}}${'}'}`;
-}
-
-function insertField(field) {
-  body.value += fieldTag(field);
 }
 
 onMounted(async () => {
@@ -78,15 +75,59 @@ const canSend = computed(
   () =>
     name.value.trim() &&
     subject.value.trim() &&
-    body.value.trim() &&
+    body.value.replace(/<[^>]*>/g, '').trim() &&
     parsed.value.recipients.length > 0 &&
     selectedAccounts.value.length > 0 &&
     !unknownFields.value.length
 );
 
-// function insertField(field) {
-//   body.value += `{{${field}}}`;
-// }
+/** Vue's compiler can't handle literal braces inside an interpolation. */
+function fieldTag(field) {
+  return `{${'{'}${field}}${'}'}`;
+}
+
+function insertField(field) {
+  bodyEditor.value?.insertAtCursor(fieldTag(field));
+}
+
+/**
+ * Pull rows from a Google Sheet into the paste box.
+ *
+ * Deliberately fills the same textarea rather than bypassing it: the user
+ * sees exactly what was imported and can edit it before sending, and there is
+ * only one parsing path to reason about.
+ */
+async function importSheet() {
+  if (!sheetUrl.value.trim()) return;
+
+  const account = accounts.value.find((a) =>
+    selectedAccounts.value.includes(a.backendId)
+  );
+
+  if (!account) {
+    error.value = 'Pick an account first — Batchmail reads the sheet as that user.';
+    return;
+  }
+
+  importing.value = true;
+  error.value = null;
+  importNote.value = null;
+
+  try {
+    const result = await send({
+      type: 'sheets:import',
+      url: sheetUrl.value.trim(),
+      email: account.email,
+    });
+
+    pasted.value = result.text;
+    importNote.value = `Loaded ${result.rowCount} rows from "${result.sheetTitle}".`;
+  } catch (err) {
+    error.value = err.message;
+  } finally {
+    importing.value = false;
+  }
+}
 
 async function start() {
   error.value = null;
@@ -163,9 +204,32 @@ const segments = computed(() => {
           <div class="field">
             <label for="bm-recipients">Recipients</label>
             <p class="help">
-              Paste cells straight from a spreadsheet. The first row is used as
-              column names, and every column becomes a merge field.
+              Import from Google Sheets, or paste cells straight from a
+              spreadsheet. The first row is used as column names, and every
+              column becomes a merge field.
             </p>
+
+            <div class="import-row">
+              <input
+                v-model="sheetUrl"
+                class="mono"
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+                @keydown.enter.prevent="importSheet"
+              />
+              <button
+                class="btn-quiet"
+                type="button"
+                :disabled="importing || !sheetUrl.trim()"
+                @click="importSheet"
+              >
+                {{ importing ? 'Loading…' : 'Import' }}
+              </button>
+            </div>
+
+            <p v-if="importNote" class="ok-note">{{ importNote }}</p>
+
+            <div class="divider">or paste</div>
+
             <textarea
               id="bm-recipients"
               v-model="pasted"
@@ -201,8 +265,8 @@ const segments = computed(() => {
           </div>
 
           <div class="field">
-            <label for="bm-body">Message</label>
-            <textarea id="bm-body" v-model="body" rows="8" />
+            <label>Message</label>
+            <RichEditor ref="bodyEditor" v-model="body" />
             <p v-if="unknownFields.length" class="warn">
               Unknown merge field(s): {{ unknownFields.join(', ') }}. These would
               send as blanks.

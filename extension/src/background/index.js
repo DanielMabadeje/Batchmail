@@ -6,7 +6,8 @@
  * durable state is in chrome.storage or on the backend.
  */
 
-import { connectAccount, disconnectAccount, listAccounts } from './auth.js';
+import { connectAccount, disconnectAccount, listAccounts, ensureSheetsScope } from './auth.js';
+import { fetchSheetAsText } from '../lib/google-sheets.js';
 import { runCampaign } from './sender.js';
 import * as api from './api.js';
 
@@ -32,6 +33,9 @@ async function handle(message) {
     case 'accounts:disconnect':
       return disconnectAccount(message.email);
 
+    case 'sheets:import':
+      return importSheet(message.url, message.email);
+
     case 'campaign:create':
       return createAndStart(message.payload);
 
@@ -47,6 +51,17 @@ async function handle(message) {
     default:
       throw new Error(`Unknown message type: ${message.type}`);
   }
+}
+
+/**
+ * Read a Google Sheet and hand back tab-separated text.
+ *
+ * Runs here rather than in the content script because it needs the OAuth
+ * token, which never leaves the service worker.
+ */
+async function importSheet(url, email) {
+  const token = await ensureSheetsScope(email);
+  return fetchSheetAsText(url, token);
 }
 
 /**
