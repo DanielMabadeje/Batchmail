@@ -34,64 +34,60 @@ service provider — that is the honest answer.
 
 This is a tool for mail merge to people who expect to hear from you.
 
+## What's in v1
+
+- Compose campaigns without leaving Gmail
+- Recipients by pasting spreadsheet cells or importing a Google Sheets link
+- Every column becomes a merge field, usable in the subject and body
+- A small rich text editor — bold, italic, lists, links
+- Paced sending with jitter, and automatic backoff when Gmail pushes back
+- Multiple connected accounts, with work spread by remaining quota
+- Campaigns resume where they left off after a browser restart
+
+Not built yet: sending with the browser closed, scheduling and drip
+sequences, reply detection, bounce processing. Open and click tracking has a
+schema but no endpoints.
+
+## Getting started
+
+**[docs/setup.md](docs/setup.md)** walks through the whole thing — Google
+Cloud project, backend, extension, and first send. About 30 minutes.
+
+You'll need Node 20+, PHP 8.2+, and PostgreSQL or MySQL 8+. Not SQLite; the
+setup guide explains why that one matters.
+
 ## Repo layout
 
 ```
 batchmail/
-├── api/          Laravel backend — campaigns, pacing, tracking
+├── api/          Laravel backend — campaigns, pacing, quota accounting
 ├── extension/    Chrome extension — Vue + Vite, does the sending
-├── docs/         architecture and API contract
-└── docker-compose.yml
+└── docs/
+    ├── setup.md          how to run your own instance
+    └── architecture.md   how it works and why
 ```
 
-Start with [`docs/architecture.md`](docs/architecture.md). It explains the
-client/server split, the lease mechanism that stops two open tabs from
-double-sending, and the full API surface.
+[`docs/architecture.md`](docs/architecture.md) explains the client/server
+split, the lease mechanism that stops two open Gmail tabs from double-sending
+the same recipient, and the full API surface. Worth reading before changing
+anything in the send path.
 
-## Running it yourself
+## A note on scopes
 
-You need a Google Cloud project with the Gmail API enabled and an OAuth
-client of type **Chrome Extension**. While your OAuth app is in testing mode
-you can add up to 100 test accounts and skip Google's verification process
-entirely — enough to run this for yourself or a small team indefinitely.
+Batchmail asks for `gmail.send` and, only when you import a Sheets link,
+`spreadsheets.readonly`. Both are classified sensitive rather than
+restricted — no third-party security audit, and no access to read your
+mailbox.
 
-Only request the `gmail.send` scope. It is classified sensitive rather than
-restricted, which means no third-party security assessment. Adding
-`gmail.readonly` or `gmail.modify` moves you into restricted scope territory
-and an annual CASA audit. Don't.
-
-### Backend
-
-```bash
-cp .env.example .env
-docker compose up -d
-docker compose exec api php artisan key:generate
-docker compose exec api php artisan migrate
-```
-
-### Extension
-
-```bash
-cd extension
-npm install
-npm run build
-```
-
-Then load `extension/dist` as an unpacked extension at
-`chrome://extensions` with developer mode on. Point it at your backend URL
-in the options page.
-
-## Status
-
-Early. v1 scope is single-shot campaigns with CSV recipients, merge fields,
-pacing, and open/click tracking. Not yet built: server-side sending, reply
-detection, drip sequences, bounce processing.
+It will never request `gmail.readonly`, `gmail.modify`, or
+`mail.google.com`. Those would allow reading everything in your inbox, and
+would commit the project to an annual paid security assessment.
 
 ## Contributing
 
-Issues and PRs welcome. If you're changing anything about the send loop or
-the claim/lease logic, read the architecture doc first — the concurrency
-story there is load-bearing.
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). If you're
+changing the send loop or the claim/lease logic, read the architecture doc
+first; the concurrency story there is load-bearing.
 
 ## Licence
 
