@@ -54,20 +54,21 @@ async function sendBatch(claim) {
   const leaseDeadline = new Date(claim.lease_expires_at).getTime();
   const results = [];
 
-  for (const recipient of claim.recipients) {
+  for (const [i, recipient] of claim.recipients.entries()) {
     if (Date.now() > leaseDeadline - LEASE_SAFETY_MARGIN_MS) break;
 
     const result = await sendOne(recipient, claim.campaign);
     results.push(result);
 
-    // Any rate-limit signal stops the whole batch. Backing off the account
-    // is the correct response; retrying the message is how accounts get
-    // suspended rather than merely slowed.
     if (result.outcome === 'rate_limited') break;
 
-    await sleep(
-      jitter(claim.campaign.min_delay_seconds, claim.campaign.max_delay_seconds)
-    );
+    // No pause after the last one — the gap belongs *between* sends, and
+    // sleeping here just delays reporting results by up to max_delay.
+    if (i < claim.recipients.length - 1) {
+      await sleep(
+        jitter(claim.campaign.min_delay_seconds, claim.campaign.max_delay_seconds)
+      );
+    }
   }
 
   return results;
